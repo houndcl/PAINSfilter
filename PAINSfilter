@@ -1,0 +1,223 @@
+#! /usr/bin/env python
+
+"""
+                               *** PAINS filter ***            
+
+%prog -i <input> [-I <sdf/mol2/mol/smi>]
+            [-o <string>] [-O <sdf/mol2/mol/smi>]
+            [-n <ncpu>] [-q/--quiet]
+            [-h/--help]
+  
+  e.g.  %prog -i foo.sdf
+        %prog -i foo -I mol2 -o drug -O sdf -n 8
+        %prog -i foo.sdf -n 8 -q 
+
+Description
+
+PAINS (Pan Assay Interference Compounds) are either reactive, fluorescent, 
+strongly colored, metal-trapping, toxin-trapping, or able to alter proteins
+chemically without fitting specifically into a binding site [1]. Therefore,
+PAINS are more likely to generate unspecific artifacts in bioassays so that 
+efforts are wasted in attempts to optimize the activity of these compounds.
+ 
+PAINSfilter screens the given chemical library based on the SMARTS pattern
+reported by Jonathan Baell and Georgina Holloway [2]. PAINS SMARTS are 
+translated from table S6-S8, downloaded from http://www.macinchem.org
+/reviews/pains/painsFilter.php, which involves the work by Rajarshi Guha 
+(http://blog.rguha.net/?p=850) and Cactvs toolkit from Xhemistry.
+
+[1] Chemistry: Chemical con artists foil drug discovery. J. B. Baell & M. A. 
+    Walters. Nature, 513, 481-483. doi:10.1038/513481a
+[2] "New Substructure Filters for Removal of Pan Assay Interference Compounds
+    (PAINS) from Screening Libraries and for their Exclusion in Bioassays",
+    J. B. Baell & G. A. Holloway, J. Med. Chem, 2010, Vol. 53, No 7, 2719-2740.
+
+If a compound fails to pass the PAINSfilter, it does not necessarily mean it's
+not a good candidate. With respect to the definition of PAINS, these compounds
+are more likely to be a false positive in bioassays. Thus, extra experimental
+validation step should be taken (e.g. change the readout wavelength, measure the 
+concentration-dependent inhibition, etc).
+
+By default, this program will generate a "pass.sdf" and "fail.sdf" file, unless 
+the prefix(-o) or the format(-O) of the outputs are specfied. If all compounds
+pass the filter, no files will be generated. 'PAINS_flag' attribute will be 
+added to the failed compounds. The supported formats are sdf/mol2/mol/smi. 
+To accelerate the computation, you can use -n <int> to process the molecules in 
+parallel. -h/--help to display the help. 
+
+Package dependency: 
+multiprocessing, Pybel
+
+compatible with python2.4 if multiprocessing module is installed.
+ 
+"""
+
+
+import pybel
+import multiprocessing
+import os.path
+import sys
+from optparse import OptionParser
+import time
+
+def parsePAINS_SMARTS(filename):
+    """ parse the smarts tables and return a dictionary """
+    PAINdict = {}
+    pf = open(filename, 'r')
+    for pl in pf:
+        ps = pl.split('\t')
+        if ps[0] == 'FRAGMENT':
+            name = ps[1][6:]
+            smarts = ps[2]
+            PAINdict[name] = smarts
+    return PAINdict
+
+def _Painfilter(vars):
+    """ create alert for ONE molecule based on a PAINdict """
+    alerts = []
+    (smiles, PAINdict) = vars
+    mol = pybel.readstring("smi", smiles)
+    for name in PAINdict:
+        smarts = pybel.Smarts(PAINdict[name])
+        if len(smarts.findall(mol)):
+            alerts.append(name)
+    return alerts
+
+def Painfilter(molfile, PAINdict, oprefix = '', iformat = 'auto', oformat = 'auto', nproc = 1):
+    """ (MPI) create alert for molecules based on a PAINdict """
+    if iformat == 'auto':
+        iformat = os.path.splitext(molfile)[1][1:]
+        if iformat == '':
+            print "Warning: molecular format not detected. Will try sdf format."
+            iformat = 'sdf'
+    if verbose:
+        print 'Preparing molecular files...'
+    mols = pybel.readfile(iformat, molfile)
+    vars = []
+    nmol = 0
+    for mol in mols:
+        vars.append((mol.__str__(), PAINdict))
+        nmol += 1
+    if verbose:
+        print '===>', nmol, 'molecules processed'
+    if nmol == 0:
+        sys.exit('error: 0 molecule found in the file')
+    if verbose:
+        print 'PAINS-SMARTS matching on', nproc, 'process(es)...'
+    pool = multiprocessing.Pool(processes = nproc)
+    result = pool.map(_Painfilter, vars)
+    pool.close()    # start the mpi
+    pool.join()
+    
+    flagged_idx = [i for i,j in enumerate(result) if j != []]
+    if verbose:
+        print '===>', len(flagged_idx), 'PAINS detected'
+    if len(flagged_idx) == 0:
+        print 'hurray, no PAINS found'
+        return 0
+    if verbose:
+        print 'Writing output files'
+
+    if oprefix != '':
+        passmols_name = oprefix + '_pass.' + oformat
+        failmols_name = oprefix + '_fail.' + oformat
+    else:
+        passmols_name = 'pass.' + oformat
+        failmols_name = 'fail.' + oformat
+
+    passmols = pybel.Outputfile(oformat, passmols_name, overwrite = True)
+    failmols = pybel.Outputfile(oformat, failmols_name, overwrite = True)
+
+    mols = pybel.readfile(iformat, molfile)
+    i = 0
+    for mol in mols:
+        if (i in flagged_idx):
+            mol.data['PAINS_Flag'] = '|'.join(result[i])
+            failmols.write(mol)
+        else:
+            passmols.write(mol)
+        i += 1
+
+
+if __name__ == '__main__':
+
+    timestart = time.time()
+
+    parser = OptionParser(__doc__)
+
+    parser.add_option("-q", "--quiet",
+                      action = 'store_false',                      
+                      dest = 'verbose',                           
+                      default = True,                            
+                      help = 'verbose output (default=False)')
+
+    parser.add_option("-p",
+                      dest = 'painssmarts',
+                      metavar = '<string>',
+                      default = 'auto',
+                      help = 'SMARTS pattern file (default=auto)')
+
+    parser.add_option("-n",
+                      dest = 'nproc',
+                      metavar = '<int>',
+                      default = 1,
+                      help = 'number of processess (default=1)')
+
+    parser.add_option("-i",
+                      dest = 'inputname',
+                      metavar = '<string>',
+                      default = '',
+                      help = 'input filename (Required)')
+
+    parser.add_option("-I",
+                      dest = 'inputformat',
+                      metavar = '<string>',
+                      default = 'auto',
+                      help = 'input format (default=auto[autodetect])')
+
+    parser.add_option("-o",
+                      dest = 'outputname',
+                      metavar = '<string>',
+                      default = '',
+                      help = 'output prefix (default="pass", "fail")')
+
+    parser.add_option("-O",
+                      dest = 'outputformat',
+                      metavar = '<string>',
+                      default = 'sdf',
+                      help = 'output format (default=sdf)')
+
+    (options, args) =  parser.parse_args()
+
+    if len(args) != 0:
+        parser.error('no argument required')
+
+    inputname = options.inputname
+    inputformat = options.inputformat
+    outputname = options.outputname
+    outputformat = options.outputformat
+    painssmarts = options.painssmarts
+    nproc = int(options.nproc)
+    verbose = options.verbose
+
+    if inputname == '':
+        parser.error('please use -i to specify a file.')
+
+    if os.path.isfile(inputname) == False:
+        parser.error('input file ' + inputname + ' does\'t exist')
+
+    if painssmarts == 'auto':
+        abspath = os.path.dirname(sys.argv[0])
+        painssmarts = abspath + '/PAINS.sieve'
+    elif os.path.isfile(painssmarts) == False:
+        parser.error('smarts file ' + painssmarts + ' doesn\'t exist')
+
+    if verbose:
+        parser.print_usage()
+    PAINSdict = parsePAINS_SMARTS(painssmarts)
+    Painfilter(inputname, PAINSdict, iformat = inputformat, oprefix = outputname, oformat = outputformat, nproc = nproc)
+
+    timeend = time.time()
+    if verbose:
+        print '*finished in', "%.3f" %(timeend - timestart), 'seconds'
+        

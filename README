@@ -1,0 +1,49 @@
+                               *** PAINS filter ***            
+
+%prog -i <input> [-I <sdf/mol2/mol/smi>]
+            [-o <string>] [-O <sdf/mol2/mol/smi>]
+            [-n <ncpu>] [-q/--quiet]
+            [-h/--help]
+  
+  e.g.  %prog -i foo.sdf
+        %prog -i foo -I mol2 -o drug -O sdf -n 8
+        %prog -i foo.sdf -n 8 -q 
+
+Description
+
+PAINS (Pan Assay Interference Compounds) are either reactive, fluorescent, 
+strongly colored, metal-trapping, toxin-trapping, or able to alter proteins
+chemically without fitting specifically into a binding site [1]. Therefore,
+PAINS are more likely to generate unspecific artifacts in bioassays so that 
+efforts are wasted in attempts to optimize the activity of these compounds.
+ 
+PAINSfilter screens the given chemical library based on the SMARTS pattern
+reported by Jonathan Baell and Georgina Holloway [2]. PAINS SMARTS are 
+translated from table S6-S8, downloaded from http://www.macinchem.org
+/reviews/pains/painsFilter.php, which involves the work by Rajarshi Guha 
+(http://blog.rguha.net/?p=850) and Cactvs toolkit from Xhemistry.
+
+[1] Chemistry: Chemical con artists foil drug discovery. J. B. Baell & M. A. 
+    Walters. Nature, 513, 481-483. doi:10.1038/513481a
+[2] "New Substructure Filters for Removal of Pan Assay Interference Compounds
+    (PAINS) from Screening Libraries and for their Exclusion in Bioassays",
+    J. B. Baell & G. A. Holloway, J. Med. Chem, 2010, Vol. 53, No 7, 2719-2740.
+
+If a compound fails to pass the PAINSfilter, it does not necessarily mean it's
+not a good candidate. With respect to the definition of PAINS, these compounds
+are more likely to be a false positive in bioassays. Thus, extra experimental
+validation step should be taken (e.g. change the readout wavelength, measure the 
+concentration-dependent inhibition, etc).
+
+By default, this program will generate a "pass.sdf" and "fail.sdf" file, unless 
+the prefix(-o) or the format(-O) of the outputs are specfied. If all compounds
+pass the filter, no files will be generated. 'PAINS_flag' attribute will be 
+added to the failed compounds. The supported formats are sdf/mol2/mol/smi. 
+To accelerate the computation, you can use -n <int> to process the molecules in 
+parallel. -h/--help to display the help. 
+
+Package dependency: 
+multiprocessing, Pybel
+
+compatible with python2.4 if multiprocessing module is installed.
+ 
